@@ -154,6 +154,8 @@ cursor:pointer;text-transform:uppercase;transition:all .25s;opacity:0;animation:
 .ph-n{font-family:'Anton',sans-serif;font-size:20px;letter-spacing:2px;text-transform:uppercase}
 .ph-s{font-size:12px;color:var(--gris);letter-spacing:1px}
 .mq{font-size:16.5px;line-height:1.75;padding:1.75rem 2rem;background:#fff;border-left:4px solid var(--rouge);margin-bottom:2rem;opacity:0;animation:fadeSlow .6s .5s forwards;white-space:pre-line}
+.kw{opacity:.16;transition:opacity .3s ease-out}
+.kw.on{opacity:1}
 .mcall{margin-bottom:2rem;opacity:0;animation:fadeSlow .5s .4s forwards}
 .mvoice{display:flex;align-items:center;gap:14px;background:var(--beige);padding:.75rem 1.1rem;margin-bottom:1rem}
 .mvoice-l{font-family:'Anton',sans-serif;font-size:11px;letter-spacing:2px;color:var(--rouge);text-transform:uppercase;white-space:nowrap}
@@ -386,8 +388,6 @@ cursor:pointer;text-transform:uppercase;transition:all .25s;opacity:0;animation:
     <div class="rnarr" id="r-narr"></div>
     <div class="sechead" id="r-ah"></div>
     <div id="r-analysis"></div>
-    <div class="sechead" id="r-ph"></div>
-    <div id="r-pedago"></div>
     <div class="unst">HUMANITY IS UNSTOPPABLE</div>
   </div></div>
 </div>
@@ -1699,19 +1699,23 @@ const VERDICTS = {
 /* Deux pistes en boucle : le menu, puis le jeu. Volumes tenus bas
    pour que les bruitages restent audibles au-dessus. Le jeu fonctionne
    normalement si les fichiers sont absents. */
-const MUSIC={menu:'menu.mp3',game:'game.mp3'};
-const VOL={menu:0.34,game:0.24};
-let mMenu=null,mGame=null,mCur=null,musicOn=true,musicReady=false;
-function makeTrack(src,vol){
+const MUSIC={menu:'menu.mp3',game:'game.mp3',win:'win.mp3'};
+const VOL={menu:0.34,game:0.24,win:0.42};
+let mMenu=null,mGame=null,mWin=null,mCur=null,musicOn=true,musicReady=false;
+function makeTrack(src,vol,loop){
   if(typeof Audio!=='function')return null;
-  try{const a=new Audio(src);a.loop=true;a.volume=0;a.preload='auto';a.dataset.vol=vol;return a}
+  try{const a=new Audio(src);a.loop=(loop!==false);a.volume=0;a.preload='auto';a.dataset.vol=vol;return a}
   catch(e){return null}
 }
 function initMusic(){
   if(musicReady)return;musicReady=true;
   mMenu=makeTrack(MUSIC.menu,VOL.menu);
   mGame=makeTrack(MUSIC.game,VOL.game);
+  // Le jingle de fin ne boucle pas : quatre secondes en boucle sur un écran
+  // qu'on lit une minute deviendraient vite pénibles.
+  mWin=makeTrack(MUSIC.win,VOL.win,false);
 }
+function musicWin(){initMusic();playTrack(mWin,true)}
 function fade(a,to,ms,then){
   if(!a){if(then)then();return}
   const from=a.volume,t0=Date.now();
@@ -1721,13 +1725,14 @@ function fade(a,to,ms,then){
     if(p>=1){clearInterval(id);if(then)then()}
   },40);
 }
-function playTrack(a){
+function playTrack(a,quick){
   if(!a||!musicOn)return;
   const target=parseFloat(a.dataset.vol||'0.3');
-  if(mCur&&mCur!==a){const old=mCur;fade(old,0,700,()=>{try{old.pause()}catch(e){}})}
+  if(mCur&&mCur!==a){const old=mCur;fade(old,0,quick?350:700,()=>{try{old.pause()}catch(e){}})}
   mCur=a;
+  try{a.currentTime=0}catch(e){}
   try{const p=a.play();if(p&&p.catch)p.catch(()=>{})}catch(e){}
-  fade(a,target,900);
+  fade(a,target,quick?250:900);
 }
 function musicMenu(){initMusic();playTrack(mMenu)}
 function musicGame(){initMusic();playTrack(mGame)}
@@ -2241,14 +2246,43 @@ function miryam(){
   btn.onclick=()=>{btn.disabled=true;call.style.display='none';sRing();answerCall()};
   upTimers();upScore();show('miryam-screen');
 }
-/* Décroché : la voix part, la réplique s'affiche, les questions apparaissent. */
+/* La réplique se dévoile mot à mot au rythme de la voix.
+   Si l'audio manque ou ne démarre pas, tout s'affiche d'un coup. */
+let kwRaf=null;
+function syncQuote(text){
+  const q=document.getElementById('mi-quote'), el=document.getElementById('mi-audio');
+  if(!q)return;
+  q.style.display='block';
+  if(!el||typeof Audio!=='function'){q.innerHTML='';q.textContent=text;return}
+  const esc=x=>x.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  q.innerHTML=text.split(' ').map(w=>'<span class="kw">'+esc(w)+'</span>').join(' ');
+  const spans=q.querySelectorAll?q.querySelectorAll('.kw'):[];
+  if(!spans||!spans.length){q.innerHTML='';q.textContent=text;return}
+  const showAll=()=>{for(let i=0;i<spans.length;i++)spans[i].classList.add('on')};
+  if(kwRaf&&typeof cancelAnimationFrame==='function'){cancelAnimationFrame(kwRaf);kwRaf=null}
+  const tick=()=>{
+    const d=el.duration;
+    if(!d||isNaN(d)||!isFinite(d)){kwRaf=requestAnimationFrame(tick);return}
+    // Léger devancement pour que le mot soit lisible au moment où il est dit.
+    const p=Math.min(1,(el.currentTime/d)*1.06);
+    const n=Math.ceil(p*spans.length);
+    for(let i=0;i<n&&i<spans.length;i++)spans[i].classList.add('on');
+    if(p>=1||el.ended){showAll();kwRaf=null;return}
+    kwRaf=requestAnimationFrame(tick);
+  };
+  if(el.addEventListener){el.addEventListener('ended',showAll);el.addEventListener('error',showAll)}
+  if(typeof requestAnimationFrame==='function')kwRaf=requestAnimationFrame(tick);
+  else showAll();
+  // Filet de sécurité : si rien ne démarre, on affiche tout.
+  setTimeout(()=>{if(el.paused&&!el.currentTime)showAll()},2500);
+}
+
+/* Décroché : la voix part, la réplique se dévoile, les questions apparaissent. */
 function answerCall(){
   const m=MIRYAM[L],u=t();
   document.getElementById('mi-status').textContent=u.miStatus;
-  const q=document.getElementById('mi-quote');
-  q.style.display='block';
-  q.textContent=m.greeting;
   playVoice();
+  syncQuote(m.greeting);
   const box=document.getElementById('mi-choices');box.innerHTML='';
   m.questions.forEach((qq,i)=>{
     const b=document.createElement('button');
@@ -2263,7 +2297,9 @@ function askMiryam(l){
   let a=m.answers[l];
   if(a&&typeof a==='object'&&(a[branch]||a.digital))a=a[branch]||a.digital; // variante par canal
   if(a&&typeof a==='object')a=a[objMode]||a.both;                           // variante par objectif
-  document.getElementById('mi-quote').textContent=a;
+  if(kwRaf&&typeof cancelAnimationFrame==='function'){cancelAnimationFrame(kwRaf);kwRaf=null}
+  const q=document.getElementById('mi-quote');
+  q.innerHTML='';q.textContent=a;q.style.display='block';
   document.getElementById('mi-choices').innerHTML='';
   stopVoice();
   setTimeout(()=>{
@@ -2887,11 +2923,9 @@ function showResults(){
   document.getElementById('r-narr').textContent=fillObj(narrText);
   document.getElementById('r-ah').textContent=u.aHead;
   document.getElementById('r-analysis').innerHTML=analysisHTML();
-  document.getElementById('r-ph').textContent=u.pHead;
-  document.getElementById('r-pedago').innerHTML=PEDAGO[L].map((p,i)=>
-    '<div class="pi"><div class="pi-n">'+String(i+1).padStart(2,'0')+'</div><div class="pi-l">'+fillObj(p)+'</div></div>').join('');
 
   saveScore(key,tot);
+  musicWin();
   show('results-screen');
   setTimeout(()=>{document.querySelectorAll('.axis-fill').forEach(f=>{f.style.width=f.dataset.w+'%'})},250);
 }
